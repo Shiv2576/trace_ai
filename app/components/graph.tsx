@@ -62,9 +62,9 @@ function ColumnRow({ col }: { col: Column }) {
   return (
     <div
       className={cn(
-        "flex items-center gap-2 border-b border-white/[0.05] px-3 py-[5px] transition-colors",
-        isPK && "bg-emerald-500/[0.04]",
-        isFK && "bg-violet-500/[0.04]"
+        "py-1.25px flex items-center gap-2 border-b border-white/5 px-3 transition-colors",
+        isPK && "bg-emerald-500/4",
+        isFK && "bg-violet-500/4"
       )}
     >
       <span className="w-3.5 shrink-0 text-center text-[10px] select-none">
@@ -140,20 +140,20 @@ function TableNode({ data, selected }: NodeProps<AnyNodeData>) {
       />
       <Card
         className={cn(
-          "w-[280px] overflow-hidden rounded-xl border transition-all duration-200",
+          "w-70px overflow-hidden rounded-xl border transition-all duration-200",
           glass.base,
           selected ? glass.selected : "shadow-[0_8px_32px_rgba(0,0,0,0.5)]"
         )}
         style={{ background: "rgba(10,10,22,0.7)" }}
       >
-        <CardHeader className="flex-row items-center gap-2 space-y-0 border-b border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
+        <CardHeader className="flex-row items-center gap-2 space-y-0 border-b border-white/6 bg-white/2 px-3 py-2.5">
           <span className="text-sm">🗂</span>
           <span className="flex-1 truncate font-mono text-[13px] font-bold text-white/90">
             {table.table_name}
           </span>
           <Badge
             variant="outline"
-            className="border-white/10 bg-white/[0.03] font-mono text-[9px] text-white/30"
+            className="border-white/10 bg-white/3 font-mono text-[9px] text-white/30"
           >
             {table.columns.length} cols
           </Badge>
@@ -163,7 +163,7 @@ function TableNode({ data, selected }: NodeProps<AnyNodeData>) {
           {table.columns.map((col) => (
             <ColumnRow key={col.name} col={col} />
           ))}
-          <div className="border-t border-white/[0.05] bg-black/20 px-3 py-2">
+          <div className="border-t border-white/5 bg-black/20 px-3 py-2">
             <p className="line-clamp-2 text-[10px] leading-relaxed text-white/25">
               {table.description}
             </p>
@@ -227,14 +227,14 @@ function FlowNode({ data, selected }: NodeProps<AnyNodeData>) {
       />
       <Card
         className={cn(
-          "w-[240px] overflow-hidden rounded-xl border transition-all duration-200",
+          "w-60 overflow-hidden rounded-xl border transition-all duration-200",
           glass.base,
           selected ? glass.selected : "shadow-[0_6px_24px_rgba(0,0,0,0.4)]"
         )}
         style={{ background: `rgba(10,10,22,0.75)` }}
       >
         <div
-          className="border-b border-white/[0.06] px-3 py-1.5"
+          className="border-b border-white/6 px-3 py-1.5"
           style={{ background: cat.glow }}
         >
           <Badge
@@ -339,13 +339,13 @@ function TimelineNode({ data, selected }: NodeProps<AnyNodeData>) {
       />
       <Card
         className={cn(
-          "w-[260px] overflow-hidden rounded-xl border transition-all duration-200",
+          "w-65px overflow-hidden rounded-xl border transition-all duration-200",
           glass.base,
           selected ? glass.selected : "shadow-[0_6px_24px_rgba(0,0,0,0.4)]"
         )}
         style={{ background: "rgba(10,10,22,0.75)" }}
       >
-        <div className="flex items-center gap-2 border-b border-white/[0.06] bg-violet-500/[0.06] px-3 py-2">
+        <div className="flex items-center gap-2 border-b border-white/6 bg-violet-500/6 px-3 py-2">
           <span className="text-[11px]">📅</span>
           <span className="font-mono text-[11px] font-bold text-violet-300">
             {node.date_label}
@@ -380,14 +380,14 @@ function ComparisonNode({ data, selected }: NodeProps<AnyNodeData>) {
   return (
     <div
       className={cn(
-        "w-[640px] overflow-hidden rounded-xl border transition-all duration-200",
+        "w-160px overflow-hidden rounded-xl border transition-all duration-200",
         glass.base,
         selected ? glass.selected : "shadow-[0_4px_20px_rgba(0,0,0,0.4)]"
       )}
       style={{ background: "rgba(10,10,22,0.75)" }}
     >
       <div className="grid grid-cols-[180px_1fr_1fr]">
-        <div className="flex items-center border-r border-white/[0.06] bg-white/[0.02] px-3.5 py-2.5">
+        <div className="flex items-center border-r border-white/6 bg-white/2 px-3.5 py-2.5">
           <span className="font-mono text-[11px] text-white/35">
             {d.category}
           </span>
@@ -401,8 +401,8 @@ function ComparisonNode({ data, selected }: NodeProps<AnyNodeData>) {
             key={i}
             className={cn(
               "px-3.5 py-2.5 transition-colors",
-              i === 0 && "border-r border-white/[0.06]",
-              opt.win && "bg-emerald-500/[0.06]"
+              i === 0 && "border-r border-white/6",
+              opt.win && "bg-emerald-500/6"
             )}
           >
             <p
@@ -471,7 +471,7 @@ function GlassControls() {
                 variant="ghost"
                 className={cn(
                   cls,
-                  "h-7 w-7 rounded-lg text-white/40 transition-all hover:bg-white/[0.08] hover:text-white/80"
+                  "h-7 w-7 rounded-lg text-white/40 transition-all hover:bg-white/8 hover:text-white/80"
                 )}
               >
                 {icon}
@@ -486,7 +486,7 @@ function GlassControls() {
           </Tooltip>
         ))}
 
-        <Separator className="my-0.5 bg-white/[0.06]" />
+        <Separator className="my-0.5 bg-white/6" />
 
         <Tooltip>
           <TooltipTrigger>
@@ -498,7 +498,7 @@ function GlassControls() {
                 "react-flow__controls-interactive h-7 w-7 rounded-lg transition-all",
                 locked
                   ? "bg-violet-500/10 text-violet-400 hover:bg-violet-500/15 hover:text-violet-300"
-                  : "text-white/40 hover:bg-white/[0.08] hover:text-white/80"
+                  : "text-white/40 hover:bg-white/8 hover:text-white/80"
               )}
             >
               {locked ? (
@@ -532,7 +532,7 @@ function GlassMiniMap() {
       )}
       style={{ background: "rgba(8,8,18,0.8)" }}
     >
-      <div className="flex items-center gap-2 border-b border-white/[0.06] px-3 py-1.5">
+      <div className="flex items-center gap-2 border-b border-white/6 px-3 py-1.5">
         <MapIcon className="h-3 w-3 text-white/30" />
         <span className="font-mono text-[10px] tracking-widest text-white/25 uppercase">
           minimap
