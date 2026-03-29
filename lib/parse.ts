@@ -40,6 +40,49 @@ const edgeBase = {
   markerEnd: marker,
 }
 
+// ─── Safe Parsing Utility ──────────────────────────────────────────────────
+// Use this wherever you call JSON.parse on LLM/API output.
+// Strips markdown code fences that models sometimes emit in production.
+
+export function safeParseLLMJson<T = unknown>(raw: unknown): T | null {
+  if (raw == null) return null
+  if (typeof raw === "object") return raw as T // already parsed
+
+  if (typeof raw !== "string") return null
+
+  let text = raw.trim()
+
+  // Strip ```json ... ``` or ``` ... ``` fences (common in production LLM output)
+  text = text
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim()
+
+  // Strip a leading BOM or stray unicode that Vercel edge might inject
+  text = text.replace(/^\uFEFF/, "")
+
+  // Truncated response guard — if it doesn't end with } or ] it's incomplete
+  if (!/[}\]]$/.test(text)) {
+    console.error(
+      "[safeParseLLMJson] Response appears truncated:",
+      text.slice(-120)
+    )
+    return null
+  }
+
+  try {
+    return JSON.parse(text) as T
+  } catch (err) {
+    console.error("[safeParseLLMJson] JSON.parse failed:", err)
+    console.error(
+      "[safeParseLLMJson] Raw text (first 500):",
+      text.slice(0, 500)
+    )
+    console.error("[safeParseLLMJson] Raw text (last 200):", text.slice(-200))
+    return null
+  }
+}
+
 // ─── Guards ────────────────────────────────────────────────────────────────
 
 function isPositiveInt(v: unknown): v is number {
@@ -49,11 +92,16 @@ function isPositiveInt(v: unknown): v is number {
 }
 
 function safeString(v: unknown, fallback = ""): string {
-  return typeof v === "string" ? v : fallback
+  if (typeof v === "string") return v
+  if (v == null) return fallback
+  // Coerce numbers/booleans that an LLM might emit instead of a string
+  return String(v)
 }
 
 function safeStringOrNull(v: unknown): string | null {
-  return typeof v === "string" ? v : null
+  if (typeof v === "string") return v
+  if (v == null) return null
+  return String(v)
 }
 
 function safeNumberArray(v: unknown): number[] {
@@ -61,29 +109,27 @@ function safeNumberArray(v: unknown): number[] {
   return v.filter(isPositiveInt)
 }
 
+function safeArray<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v.filter((x) => x != null) as T[]) : []
+}
+
 // ─── Tier computation (cycle-safe) ─────────────────────────────────────────
 
-/**
- * Computes a topological tier for each node ID.
- * Uses a "visiting" set to detect and break cycles rather than
- * silently looping or returning 0 for all nodes in a cycle.
- */
 function buildTierMap(
   ids: number[],
   getDeps: (id: number) => number[]
 ): Map<number, number> {
   const tiers = new Map<number, number>()
-  const visiting = new Set<number>() // cycle detection
+  const visiting = new Set<number>()
 
   function getTier(id: number): number {
     if (tiers.has(id)) return tiers.get(id)!
     if (visiting.has(id)) {
-      // Cycle detected — cap this branch at 0 to avoid infinite recursion
       console.warn(`[toFlow] Cycle detected at node id=${id}; breaking cycle.`)
       return 0
     }
     visiting.add(id)
-    const deps = getDeps(id).filter((dep) => dep !== id) // drop self-references
+    const deps = getDeps(id).filter((dep) => dep !== id)
     const tier = deps.length === 0 ? 0 : Math.max(...deps.map(getTier)) + 1
     visiting.delete(id)
     tiers.set(id, tier)
@@ -94,10 +140,6 @@ function buildTierMap(
   return tiers
 }
 
-/**
- * Given a tier map, returns per-tier counts and a positional index
- * factory so callers can compute x/y without mutating shared state.
- */
 function buildTierLayout(tiers: Map<number, number>) {
   const counts = new Map<number, number>()
   for (const tier of tiers.values()) {
@@ -121,10 +163,10 @@ function buildTierLayout(tiers: Map<number, number>) {
 // ─── Schema ────────────────────────────────────────────────────────────────
 
 export function schemaToFlow(r: SchemaResponse) {
-  const tables = Array.isArray(r.tables) ? r.tables : []
+  const tables = safeArray<Table>(r?.tables)
 
   const validTables = tables.filter(
-    (t): t is Table & { id: number } => t != null && isPositiveInt(t.id)
+    (t): t is Table & { id: number } => t != null && isPositiveInt(t?.id)
   )
 
   const idSet = new Set(validTables.map((t) => t.id))
@@ -159,7 +201,6 @@ export function schemaToFlow(r: SchemaResponse) {
   const seen = new Set<string>()
 
   for (const t of validTables) {
-    // Tier-based dependency edges
     for (const pid of safeNumberArray(t.depends_upon)) {
       if (!idSet.has(pid) || pid === t.id) continue
       const k = `${pid}-${t.id}`
@@ -173,8 +214,9 @@ export function schemaToFlow(r: SchemaResponse) {
       })
     }
 
-    // Column-level foreign-key edges
-    const columns = Array.isArray(t.columns) ? t.columns : []
+    const columns = safeArray<{ name?: unknown; references?: unknown }>(
+      t?.columns
+    )
     for (const col of columns) {
       if (!col?.references || typeof col.references !== "string") continue
       const refTableName = col.references.split(".")[0]
@@ -205,10 +247,10 @@ export function schemaToFlow(r: SchemaResponse) {
 // ─── Flow ──────────────────────────────────────────────────────────────────
 
 function flowToFlow(r: FlowResponse) {
-  const flowNodes = Array.isArray(r.nodes) ? r.nodes : []
+  const flowNodes = safeArray<FlowNode>(r?.nodes)
 
   const validNodes = flowNodes.filter(
-    (n): n is FlowNode & { id: number } => n != null && isPositiveInt(n.id)
+    (n): n is FlowNode & { id: number } => n != null && isPositiveInt(n?.id)
   )
 
   const idSet = new Set(validNodes.map((n) => n.id))
@@ -263,11 +305,11 @@ function flowToFlow(r: FlowResponse) {
 // ─── Mindmap ───────────────────────────────────────────────────────────────
 
 function mindmapToFlow(r: MindmapResponse) {
-  const allNodes = Array.isArray(r.nodes) ? r.nodes : []
+  const allNodes = safeArray<MindmapNode>(r?.nodes)
 
   const validNodes = allNodes.filter(
     (n): n is MindmapNode & { id: number } =>
-      n != null && isPositiveInt(n.id) && isPositiveInt(n.level)
+      n != null && isPositiveInt(n?.id) && isPositiveInt(n?.level)
   )
 
   const root = validNodes.find((n) => n.level === 0) ?? null
@@ -292,7 +334,7 @@ function mindmapToFlow(r: MindmapResponse) {
     const angle =
       branchCount > 1
         ? (i / branchCount) * 2 * Math.PI - Math.PI / 2
-        : -Math.PI / 2 // single branch: point upward
+        : -Math.PI / 2
     const x = Math.cos(angle) * 380
     const y = Math.sin(angle) * 280
 
@@ -346,10 +388,10 @@ function mindmapToFlow(r: MindmapResponse) {
 // ─── Timeline ──────────────────────────────────────────────────────────────
 
 function timelineToFlow(r: TimelineResponse) {
-  const allNodes = Array.isArray(r.nodes) ? r.nodes : []
+  const allNodes = safeArray<TimelineNode>(r?.nodes)
 
   const validNodes = allNodes.filter(
-    (n): n is TimelineNode & { id: number } => n != null && isPositiveInt(n.id)
+    (n): n is TimelineNode & { id: number } => n != null && isPositiveInt(n?.id)
   )
 
   const nodes: Node<AnyNodeData>[] = validNodes.map((n, i) => ({
@@ -383,10 +425,16 @@ function timelineToFlow(r: TimelineResponse) {
 // ─── Comparison ────────────────────────────────────────────────────────────
 
 function comparisonToFlow(r: ComparisonResponse) {
-  const items = Array.isArray(r.items) ? r.items : []
+  const items = safeArray<{
+    id?: unknown
+    category?: unknown
+    option_a?: unknown
+    option_b?: unknown
+    winner?: unknown
+  }>(r?.items)
 
   const nodes: Node<AnyNodeData>[] = items
-    .filter((item) => item != null && isPositiveInt(item.id))
+    .filter((item) => item != null && isPositiveInt(item?.id))
     .map((item, i) => ({
       id: String(item.id),
       type: "comparisonNode",
@@ -398,7 +446,7 @@ function comparisonToFlow(r: ComparisonResponse) {
         option_a: safeString(item.option_a),
         option_b: safeString(item.option_b),
         winner: safeStringOrNull(item.winner),
-        id: item.id,
+        id: item.id as number,
       } satisfies ComparisonNodeData,
     }))
 
@@ -407,34 +455,65 @@ function comparisonToFlow(r: ComparisonResponse) {
 
 // ─── Entry point ───────────────────────────────────────────────────────────
 
-export function toFlow(response: AnyResponse): {
+export function toFlow(response: unknown): {
   nodes: Node<AnyNodeData>[]
   edges: Edge[]
 } {
+  // ── 1. Handle null/undefined ──────────────────────────────────────────
   if (response == null) {
     console.warn("[toFlow] Received null/undefined response")
     return { nodes: [], edges: [] }
   }
 
-  switch (response.type) {
-    case "schema":
-      return schemaToFlow(response)
-    case "flow":
-      return flowToFlow(response)
-    case "mindmap":
-      return mindmapToFlow(response)
-    case "timeline":
-      return timelineToFlow(response)
-    case "comparison":
-      return comparisonToFlow(response)
-    default: {
-      // Exhaustiveness check — TypeScript will error if a case is missing
-      const _exhaustive: never = response
-      console.warn(
-        "[toFlow] Unknown response type:",
-        (_exhaustive as AnyResponse).type
-      )
+  // ── 2. If it came in as a raw string (e.g. from edge runtime), parse it ─
+  //       This is the most common Vercel-production failure mode.
+  let parsed: AnyResponse
+  if (typeof response === "string") {
+    const result = safeParseLLMJson<AnyResponse>(response)
+    if (result == null) {
+      console.error("[toFlow] Could not parse string response")
       return { nodes: [], edges: [] }
     }
+    parsed = result
+  } else {
+    parsed = response as AnyResponse
+  }
+
+  // ── 3. Validate the `type` discriminator ─────────────────────────────
+  if (
+    typeof parsed !== "object" ||
+    !("type" in parsed) ||
+    typeof parsed.type !== "string"
+  ) {
+    console.error(
+      "[toFlow] Response missing `type` field:",
+      JSON.stringify(parsed).slice(0, 200)
+    )
+    return { nodes: [], edges: [] }
+  }
+
+  // ── 4. Dispatch ───────────────────────────────────────────────────────
+  try {
+    switch (parsed.type) {
+      case "schema":
+        return schemaToFlow(parsed as SchemaResponse)
+      case "flow":
+        return flowToFlow(parsed as FlowResponse)
+      case "mindmap":
+        return mindmapToFlow(parsed as MindmapResponse)
+      case "timeline":
+        return timelineToFlow(parsed as TimelineResponse)
+      case "comparison":
+        return comparisonToFlow(parsed as ComparisonResponse)
+      default:
+        console.warn(
+          "[toFlow] Unknown response type:",
+          (parsed as AnyResponse).type
+        )
+        return { nodes: [], edges: [] }
+    }
+  } catch (err) {
+    console.error("[toFlow] Uncaught error during conversion:", err)
+    return { nodes: [], edges: [] }
   }
 }
