@@ -9,19 +9,21 @@ export type QueryType =
   | "timeline"
   | "comparison"
 
+// ─── Zod Schemas ───────────────────────────────────────────────────────────
+
 export const ColumnSchema = z.object({
   name: z.string(),
   type: z.string(),
-  constraints: z.array(z.string()).nullable().default([]),
-  references: z.string().nullable().default(null),
+  constraints: z.array(z.string()).nullable().catch(null),
+  references: z.string().nullable().catch(null),
 })
 
 export const TableSchema = z.object({
   id: z.number(),
   table_name: z.string(),
   description: z.string(),
-  columns: z.array(ColumnSchema),
-  depends_upon: z.array(z.number()),
+  columns: z.array(ColumnSchema).catch([]),
+  depends_upon: z.array(z.number()).catch([]),
 })
 
 export const SchemaResponseSchema = z.object({
@@ -33,7 +35,7 @@ export const FlowNodeSchema = z.object({
   id: z.number(),
   title: z.string(),
   description: z.string(),
-  depends_upon: z.array(z.number()),
+  depends_upon: z.array(z.number()).catch([]),
   category: z.string().optional(),
 })
 
@@ -60,7 +62,7 @@ export const TimelineNodeSchema = z.object({
   title: z.string(),
   description: z.string(),
   date_label: z.string(),
-  depends_upon: z.array(z.number()),
+  depends_upon: z.array(z.number()).catch([]),
 })
 
 export const TimelineResponseSchema = z.object({
@@ -102,22 +104,23 @@ export type AnyResponse =
   | TimelineResponse
   | ComparisonResponse
 
-// Fields that must be arrays of numbers — LLM sometimes returns strings
+// ─── Sanitizer ─────────────────────────────────────────────────────────────
+// Coerces LLM quirks: string IDs → numbers, missing arrays → [], etc.
+
 const NUMERIC_ARRAY_KEYS = new Set(["depends_upon"])
 
-/** Coerce a value to a number, returning null if it can't be parsed */
 function toNumber(v: unknown): number | null {
-  if (typeof v === "number") return v
+  if (typeof v === "number" && isFinite(v)) return Math.floor(v)
   if (typeof v === "string") {
-    const n = Number(v)
-    return isNaN(n) ? null : n
+    const n = Number(v.trim())
+    return isNaN(n) ? null : Math.floor(n)
   }
   return null
 }
 
 function sanitize(data: unknown, key?: string): unknown {
   if (Array.isArray(data)) {
-    const items = data.map((item) => sanitize(item))
+    const items = data.filter((x) => x != null).map((item) => sanitize(item))
     if (key && NUMERIC_ARRAY_KEYS.has(key)) {
       return items
         .map((v) => toNumber(v))
@@ -126,7 +129,7 @@ function sanitize(data: unknown, key?: string): unknown {
     return items
   }
 
-  if (data && typeof data === "object") {
+  if (data !== null && typeof data === "object") {
     const obj = data as Record<string, unknown>
     const out: Record<string, unknown> = {}
 
@@ -135,7 +138,7 @@ function sanitize(data: unknown, key?: string): unknown {
         out[k] = typeof obj[k] === "string" ? obj[k] : null
       } else if (k === "constraints") {
         out[k] = Array.isArray(obj[k])
-          ? (obj[k] as unknown[]).map((v) => String(v))
+          ? (obj[k] as unknown[]).filter((v) => v != null).map((v) => String(v))
           : []
       } else if (NUMERIC_ARRAY_KEYS.has(k)) {
         const arr = Array.isArray(obj[k]) ? obj[k] : []
@@ -145,10 +148,13 @@ function sanitize(data: unknown, key?: string): unknown {
       } else if (k === "winner") {
         out[k] = typeof obj[k] === "string" ? obj[k] : null
       } else if (k === "parent_id") {
-        out[k] = toNumber(obj[k])
+        out[k] = toNumber(obj[k]) // null is valid for root
       } else if (k === "id") {
         const n = toNumber(obj[k])
-        out[k] = n ?? 0
+        out[k] = n !== null ? n : 0
+      } else if (k === "level") {
+        const n = toNumber(obj[k])
+        out[k] = n !== null ? n : 0
       } else {
         out[k] = sanitize(obj[k], k)
       }
@@ -159,123 +165,252 @@ function sanitize(data: unknown, key?: string): unknown {
   return data
 }
 
+// ─── JSON extraction ───────────────────────────────────────────────────────
+// Handles: markdown fences, leading text, BOM, truncation
+
+function extractJson(raw: string): unknown {
+  if (!raw || typeof raw !== "string") {
+    throw new Error("extractJson: received empty or non-string input")
+  }
+
+  let text = raw
+    .replace(/^\uFEFF/, "") // BOM
+    .replace(/^```(?:json)?\s*/i, "") // opening fence
+    .replace(/\s*```\s*$/i, "") // closing fence
+    .trim()
+
+  // If there's prose before the JSON, find the first { or [
+  const jsonStart = text.search(/[{[]/)
+  if (jsonStart > 0) {
+    text = text.slice(jsonStart)
+  }
+
+  // Find the last matching closing bracket to handle trailing prose
+  const isObject = text.startsWith("{")
+  const openChar = isObject ? "{" : "["
+  const closeChar = isObject ? "}" : "]"
+  let depth = 0
+  let lastClose = -1
+
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === openChar) depth++
+    else if (text[i] === closeChar) {
+      depth--
+      if (depth === 0) {
+        lastClose = i
+        break
+      }
+    }
+  }
+
+  if (lastClose !== -1) {
+    text = text.slice(0, lastClose + 1)
+  }
+
+  if (!text)
+    throw new Error("extractJson: no JSON object/array found in response")
+
+  try {
+    return JSON.parse(text)
+  } catch (err) {
+    console.error(
+      "[extractJson] Parse failed. First 400 chars:",
+      text.slice(0, 400)
+    )
+    console.error("[extractJson] Last 200 chars:", text.slice(-200))
+    throw new Error(
+      `JSON parse error: ${err instanceof Error ? err.message : String(err)}`
+    )
+  }
+}
+
+// ─── Type detection ────────────────────────────────────────────────────────
+
 function detectType(question: string): QueryType {
   const q = question.toLowerCase()
-  if (/\bvs\b|versus|compare|difference|better|pros.*cons/.test(q))
-    return "comparison"
-  if (/database|schema|table|sql|postgres|mysql|supabase|erd|relation/.test(q))
-    return "schema"
+
+  // Comparison: explicit vs/compare signals
   if (
-    /history|timeline|evolution|when did|how did.*start|origin|over time|century|decade/.test(
+    /\bvs\.?\b|versus|\bcompare\b|\bdifference between\b|\bpros.{0,10}cons\b|\bbetter\b/.test(
+      q
+    )
+  )
+    return "comparison"
+
+  // Schema: database/SQL signals
+  if (
+    /\bdatabase\b|\bschema\b|\btable\b|\bsql\b|\bpostgres\b|\bmysql\b|\bsupabase\b|\berd\b|\brelational\b|\bentity\b/.test(
+      q
+    )
+  )
+    return "schema"
+
+  // Timeline: history/chronology signals
+  if (
+    /\bhistory\b|\btimeline\b|\bevolution\b|\bwhen did\b|\bover time\b|\bchronolog\b|\bcentury\b|\bdecade\b|\byears?\b|\bera\b|\bperiod\b/.test(
       q
     )
   )
     return "timeline"
+
+  // Flow: process/mechanism signals
   if (
-    /how does|how do|process|photosynthesis|respiration|cycle|mechanism|step|explain|what happens/.test(
+    /\bhow does\b|\bhow do\b|\bprocess\b|\bsteps?\b|\bcycle\b|\bmechanism\b|\bworkflow\b|\bpipeline\b|\bexplain how\b|\bwhat happens\b/.test(
       q
     )
   )
     return "flow"
+
+  // Default: mindmap for broad concept exploration
   return "mindmap"
 }
 
+// ─── Prompts ───────────────────────────────────────────────────────────────
+
 const PROMPTS: Record<QueryType, string> = {
-  schema: `You are a senior database architect. Return a relational database schema as STRICT JSON only.
-  Return ONLY:
-  {
-    "type": "schema",
-    "tables": [
-      {
-        "id": 1,
-        "table_name": "users",
-        "description": "Stores user accounts.",
-        "columns": [
-          { "name": "id", "type": "UUID", "constraints": ["PK", "NOT NULL"], "references": null },
-          { "name": "email", "type": "VARCHAR(255)", "constraints": ["UNIQUE", "NOT NULL"], "references": null }
-        ],
-        "depends_upon": []
-      }
-    ]
-  }
-  CRITICAL: depends_upon MUST be an array of integers (numbers), never strings. e.g. [1, 2] not ["1", "2"].
-  Rules: references is always string or null. constraints is always an array. 5-9 tables. real SQL types.`,
+  schema: `You are a senior database architect. Output ONLY a raw JSON object. No markdown, no explanation, no code fences.
 
-  flow: `You are an expert educator. Break any process into a clear step-by-step flow graph as STRICT JSON only.
-  Return ONLY:
-  {
-    "type": "flow",
-    "nodes": [
-      {
-        "id": 1,
-        "title": "Short step title",
-        "description": "Detailed explanation of this step (2-3 sentences).",
-        "depends_upon": [],
-        "category": "input"
-      }
-    ]
-  }
-  CRITICAL: depends_upon MUST be an array of integers (numbers), never strings. e.g. [1, 2] not ["1", "2"].
-  Rules: category is one of input/process/output/decision. 6-10 nodes.`,
-
-  mindmap: `You are an expert educator. Break any topic into a hierarchical mind map as STRICT JSON only.
-  Return ONLY:
-  {
-    "type": "mindmap",
-    "nodes": [
-      { "id": 1, "label": "Root Topic", "detail": "Brief overview.", "parent_id": null, "level": 0 },
-      { "id": 2, "label": "Branch", "detail": "Description.", "parent_id": 1, "level": 1 },
-      { "id": 3, "label": "Leaf detail", "detail": "Specific detail.", "parent_id": 2, "level": 2 }
-    ]
-  }
-  CRITICAL: parent_id and id MUST be integers (numbers), never strings.
-  Rules: exactly 1 root (level 0), 3-5 branches (level 1), 2-3 leaves per branch (level 2).`,
-
-  timeline: `You are a historian and educator. Break any topic into a chronological timeline as STRICT JSON only.
-  Return ONLY:
-  {
-    "type": "timeline",
-    "nodes": [
-      {
-        "id": 1,
-        "title": "Event title",
-        "description": "What happened and why it matters (2-3 sentences).",
-        "date_label": "1969",
-        "depends_upon": []
-      }
-    ]
-  }
-  CRITICAL: depends_upon MUST be an array of integers (numbers), never strings. e.g. [1, 2] not ["1", "2"].
-  Rules: 6-10 events in chronological order.`,
-
-  comparison: `You are an expert analyst. Compare two things across multiple dimensions as STRICT JSON only.
-  Return ONLY:
-  {
-    "type": "comparison",
-    "title_a": "Option A",
-    "title_b": "Option B",
-    "items": [
-      {
-        "id": 1,
-        "category": "Performance",
-        "option_a": "Description for A",
-        "option_b": "Description for B",
-        "winner": "a"
-      }
-    ],
-    "verdict": "Overall recommendation in 2 sentences."
-  }
-  CRITICAL: id MUST be an integer (number), never a string.
-  Rules: 6-8 comparison categories. winner is "a", "b", or null for tie.`,
+The JSON must match this exact structure:
+{
+  "type": "schema",
+  "tables": [
+    {
+      "id": 1,
+      "table_name": "users",
+      "description": "Stores user accounts.",
+      "columns": [
+        { "name": "id", "type": "UUID", "constraints": ["PK", "NOT NULL"], "references": null },
+        { "name": "org_id", "type": "UUID", "constraints": ["FK", "NOT NULL"], "references": "organisations.id" }
+      ],
+      "depends_upon": []
+    }
+  ]
 }
+
+RULES:
+- id and all values inside depends_upon MUST be plain integers (e.g. 1, 2, 3). Never strings.
+- depends_upon lists the id values of tables this table references via FK.
+- references is either null or a string like "other_table.column_name".
+- constraints is always an array of strings.
+- Include 5–9 tables with realistic SQL column types.`,
+
+  flow: `You are an expert educator. Output ONLY a raw JSON object. No markdown, no explanation, no code fences.
+
+The JSON must match this exact structure:
+{
+  "type": "flow",
+  "nodes": [
+    {
+      "id": 1,
+      "title": "Short step title",
+      "description": "Detailed explanation (2–3 sentences).",
+      "depends_upon": [],
+      "category": "input"
+    }
+  ]
+}
+
+RULES:
+- id and all values inside depends_upon MUST be plain integers. Never strings.
+- depends_upon contains the id values of steps that must happen before this one.
+- category is exactly one of: input | process | output | decision
+- Include 6–10 nodes covering the full process.`,
+
+  mindmap: `You are an expert educator. Output ONLY a raw JSON object. No markdown, no explanation, no code fences.
+
+The JSON must match this exact structure:
+{
+  "type": "mindmap",
+  "nodes": [
+    { "id": 1, "label": "Root Topic", "detail": "One-sentence overview.", "parent_id": null, "level": 0 },
+    { "id": 2, "label": "Branch A", "detail": "Description.", "parent_id": 1, "level": 1 },
+    { "id": 3, "label": "Leaf detail", "detail": "Specific detail.", "parent_id": 2, "level": 2 }
+  ]
+}
+
+RULES:
+- id and parent_id MUST be plain integers. Never strings.
+- Exactly 1 root node with level 0 and parent_id null.
+- 3–5 branch nodes with level 1 and parent_id pointing to root.
+- 2–3 leaf nodes per branch with level 2 and parent_id pointing to their branch.`,
+
+  timeline: `You are a historian. Output ONLY a raw JSON object. No markdown, no explanation, no code fences.
+
+The JSON must match this exact structure:
+{
+  "type": "timeline",
+  "nodes": [
+    {
+      "id": 1,
+      "title": "Event title",
+      "description": "What happened and why it matters (2–3 sentences).",
+      "date_label": "1969",
+      "depends_upon": []
+    }
+  ]
+}
+
+RULES:
+- id and all values inside depends_upon MUST be plain integers. Never strings.
+- Nodes must be in strict chronological order.
+- Include 6–10 events.`,
+
+  comparison: `You are an expert analyst. Output ONLY a raw JSON object. No markdown, no explanation, no code fences.
+
+The JSON must match this exact structure:
+{
+  "type": "comparison",
+  "title_a": "Option A name",
+  "title_b": "Option B name",
+  "items": [
+    {
+      "id": 1,
+      "category": "Performance",
+      "option_a": "Description for A in this category.",
+      "option_b": "Description for B in this category.",
+      "winner": "a"
+    }
+  ],
+  "verdict": "Overall recommendation in 2 sentences."
+}
+
+RULES:
+- id MUST be a plain integer. Never a string.
+- winner is exactly "a", "b", or null for a tie.
+- Include 6–8 comparison categories.`,
+}
+
+// ─── Zod parse with helpful errors ─────────────────────────────────────────
+
+function parseWithSchema<T>(
+  schema: z.ZodSchema<T>,
+  data: unknown,
+  label: string
+): T {
+  const result = schema.safeParse(data)
+  if (result.success) return result.data
+
+  const issues = result.error.issues
+    .slice(0, 5)
+    .map((i) => `  ${i.path.join(".")}: ${i.message}`)
+    .join("\n")
+
+  console.error(`[groq] Zod validation failed for ${label}:\n${issues}`)
+  console.error(`[groq] Sanitized data:`, JSON.stringify(data).slice(0, 400))
+
+  throw new Error(`Schema validation failed for ${label}:\n${issues}`)
+}
+
+// ─── Main fetch ────────────────────────────────────────────────────────────
 
 export async function fetchVisualization(
   question: string
 ): Promise<AnyResponse> {
   const apiKey = process.env.GROQ_API_KEY
-  if (!apiKey) throw new Error("GROQ_API_KEY is not set in .env.local")
+  if (!apiKey) throw new Error("GROQ_API_KEY is not set")
 
   const queryType = detectType(question)
+  console.log(`[groq] Detected type: ${queryType} for question: "${question}"`)
 
   const res = await fetch(GROQ_API, {
     method: "POST",
@@ -287,12 +422,14 @@ export async function fetchVisualization(
       model: "llama-3.3-70b-versatile",
       temperature: 0.1,
       max_tokens: 6000,
-      response_format: { type: "json_object" },
+      // ✅ NO response_format here — llama-3.3-70b-versatile does not
+      //    reliably support json_object on Groq in production/edge runtimes.
+      //    The prompts enforce JSON-only output instead.
       messages: [
         { role: "system", content: PROMPTS[queryType] },
         {
           role: "user",
-          content: `Topic: "${question}"\n\nReturn ONLY valid JSON. All id and depends_upon values MUST be numbers not strings.`,
+          content: `Topic: "${question}"\n\nRemember: output ONLY the raw JSON object. No markdown fences, no explanation. All id and depends_upon values must be numbers.`,
         },
       ],
     }),
@@ -300,34 +437,63 @@ export async function fetchVisualization(
 
   if (!res.ok) {
     const err = await res.text()
-    throw new Error(`Groq API error ${res.status}: ${err}`)
+    console.error(`[groq] API error ${res.status}:`, err)
+    throw new Error(`Groq API error ${res.status}: ${err.slice(0, 300)}`)
   }
 
-  const data = await res.json()
-  const raw = data?.choices?.[0]?.message?.content
-  if (!raw) throw new Error("Empty response from Groq")
+  let data: unknown
+  try {
+    data = await res.json()
+  } catch (err) {
+    throw new Error(`Failed to parse Groq HTTP response as JSON: ${err}`)
+  }
 
-  const cleaned = raw.replace(/```json|```/gi, "").trim()
+  const raw = (data as Record<string, unknown>)?.choices
+  if (!Array.isArray(raw) || raw.length === 0) {
+    console.error(
+      "[groq] Unexpected response shape:",
+      JSON.stringify(data).slice(0, 400)
+    )
+    throw new Error("Groq returned no choices")
+  }
+
+  const content = (raw[0] as Record<string, unknown>)?.message
+  const rawText = (content as Record<string, unknown>)?.content
+
+  if (typeof rawText !== "string" || rawText.trim() === "") {
+    console.error("[groq] Empty or non-string content:", rawText)
+    throw new Error("Groq returned empty content")
+  }
+
+  console.log(`[groq] Raw response length: ${rawText.length} chars`)
+
+  // Extract and parse JSON robustly
   let parsed: unknown
   try {
-    parsed = JSON.parse(cleaned)
-  } catch {
-    throw new Error(`Failed to parse JSON: ${cleaned.slice(0, 200)}`)
+    parsed = extractJson(rawText)
+  } catch (err) {
+    throw new Error(
+      `Could not extract JSON from Groq response: ${err instanceof Error ? err.message : String(err)}`
+    )
   }
 
+  // Sanitize LLM quirks (string IDs, missing arrays, etc.)
   const safe = sanitize(parsed) as Record<string, unknown>
+
+  // Force the type field to match what we asked for — LLM sometimes omits it
   safe.type = queryType
 
+  // Validate with Zod using safeParse (no hard throws)
   switch (queryType) {
     case "schema":
-      return SchemaResponseSchema.parse(safe)
+      return parseWithSchema(SchemaResponseSchema, safe, "schema")
     case "flow":
-      return FlowResponseSchema.parse(safe)
+      return parseWithSchema(FlowResponseSchema, safe, "flow")
     case "mindmap":
-      return MindmapResponseSchema.parse(safe)
+      return parseWithSchema(MindmapResponseSchema, safe, "mindmap")
     case "timeline":
-      return TimelineResponseSchema.parse(safe)
+      return parseWithSchema(TimelineResponseSchema, safe, "timeline")
     case "comparison":
-      return ComparisonResponseSchema.parse(safe)
+      return parseWithSchema(ComparisonResponseSchema, safe, "comparison")
   }
 }
