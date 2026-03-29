@@ -19,7 +19,7 @@ const ratelimit = new Ratelimit({
   limiter: Ratelimit.fixedWindow(1, "1 h"),
 })
 
-app.post("/api/visualize", async (c) => {
+app.post("/api/visualize", async (c: any) => {
   try {
     const { userId } = getAuth(c.req.raw)
 
