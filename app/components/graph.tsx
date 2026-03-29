@@ -34,8 +34,15 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { ZoomIn, ZoomOut, Maximize2, Lock, Unlock, Map } from "lucide-react"
 import { cn } from "@/lib/utils"
+import {
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Lock,
+  Unlock,
+  Map as MapIcon,
+} from "lucide-react"
 
 const glass = {
   base: "backdrop-blur-xl bg-white/[0.04] border border-white/[0.08]",
@@ -458,7 +465,7 @@ function GlassControls() {
           },
         ].map(({ icon, label, className: cls }) => (
           <Tooltip key={label}>
-            <TooltipTrigger asChild>
+            <TooltipTrigger>
               <Button
                 size="icon"
                 variant="ghost"
@@ -482,7 +489,7 @@ function GlassControls() {
         <Separator className="my-0.5 bg-white/[0.06]" />
 
         <Tooltip>
-          <TooltipTrigger asChild>
+          <TooltipTrigger>
             <Button
               size="icon"
               variant="ghost"
@@ -526,7 +533,7 @@ function GlassMiniMap() {
       style={{ background: "rgba(8,8,18,0.8)" }}
     >
       <div className="flex items-center gap-2 border-b border-white/[0.06] px-3 py-1.5">
-        <Map className="h-3 w-3 text-white/30" />
+        <MapIcon className="h-3 w-3 text-white/30" />
         <span className="font-mono text-[10px] tracking-widest text-white/25 uppercase">
           minimap
         </span>
