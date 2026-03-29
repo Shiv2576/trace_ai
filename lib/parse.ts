@@ -40,34 +40,48 @@ const edgeBase = {
   markerEnd: marker,
 }
 
-function schemaToFlow(r: SchemaResponse) {
+export function schemaToFlow(r: SchemaResponse) {
   const tiers = new Map<number, number>()
   const visited = new Set<number>()
+
   function getTier(id: number): number {
     if (tiers.has(id)) return tiers.get(id)!
     if (visited.has(id)) return 0
     visited.add(id)
+
     const t = r.tables.find((x) => x.id === id)
-    if (!t || !t.depends_upon.length) {
+    if (!t || !Array.isArray(t.depends_upon) || !t.depends_upon.length) {
       tiers.set(id, 0)
       return 0
     }
-    const m = Math.max(...t.depends_upon.map(getTier))
+
+    const m = Math.max(
+      0,
+      ...t.depends_upon.filter((dep) => typeof dep === "number").map(getTier)
+    )
     tiers.set(id, m + 1)
     return m + 1
   }
-  r.tables.forEach((t) => getTier(t.id))
+
+  // compute tiers
+  r.tables.forEach((t) => {
+    if (typeof t.id === "number") getTier(t.id)
+  })
+
+  // count nodes per tier
   const counts = new Map<number, number>()
   r.tables.forEach((t) => {
-    const tier = tiers.get(t.id)!
+    const tier = tiers.get(t.id) ?? 0
     counts.set(tier, (counts.get(tier) ?? 0) + 1)
   })
+
   const used = new Map<number, number>()
   const nodes: Node<AnyNodeData>[] = r.tables.map((t) => {
     const tier = tiers.get(t.id) ?? 0
     const count = counts.get(tier) ?? 1
     const idx = used.get(tier) ?? 0
     used.set(tier, idx + 1)
+
     return {
       id: String(t.id),
       type: "tableNode",
@@ -76,42 +90,58 @@ function schemaToFlow(r: SchemaResponse) {
       data: { kind: "schema", table: t } as TableNodeData,
     }
   })
+
   const edges: Edge[] = []
   const seen = new Set<string>()
+
   r.tables.forEach((t) => {
-    t.depends_upon.forEach((pid) => {
-      const k = `${pid}-${t.id}`
-      if (seen.has(k)) return
-      seen.add(k)
-      edges.push({
-        id: `e${k}`,
-        source: String(pid),
-        target: String(t.id),
-        ...edgeBase,
+    // tier-based dependencies
+    if (Array.isArray(t.depends_upon)) {
+      t.depends_upon.forEach((pid) => {
+        if (typeof pid !== "number") return
+        const k = `${pid}-${t.id}`
+        if (seen.has(k)) return
+        seen.add(k)
+        edges.push({
+          id: `e${k}`,
+          source: String(pid),
+          target: String(t.id),
+          ...edgeBase,
+        })
       })
-    })
-    t.columns.forEach((col) => {
-      if (!col.references) return
-      const ref = r.tables.find(
-        (x) => x.table_name === col.references!.split(".")[0]
-      )
-      if (!ref) return
-      const k = `fk-${ref.id}-${t.id}-${col.name}`
-      if (seen.has(k)) return
-      seen.add(k)
-      edges.push({
-        id: k,
-        source: String(ref.id),
-        target: String(t.id),
-        label: col.name,
-        labelStyle: { fill: "#7c6af7", fontSize: 10, fontFamily: "monospace" },
-        labelBgStyle: { fill: "#0d0d14", fillOpacity: 0.9 },
-        type: "smoothstep",
-        style: { stroke: "#4a3a8a", strokeWidth: 1.5 },
-        markerEnd: { type: MarkerType.ArrowClosed, color: "#4a3a8a" },
+    }
+
+    // column foreign keys
+    if (Array.isArray(t.columns)) {
+      t.columns.forEach((col) => {
+        if (!col.references) return
+        const refTableName = col.references.split(".")[0]
+        const ref = r.tables.find((x) => x.table_name === refTableName)
+        if (!ref) return
+
+        const k = `fk-${ref.id}-${t.id}-${col.name}`
+        if (seen.has(k)) return
+        seen.add(k)
+
+        edges.push({
+          id: k,
+          source: String(ref.id),
+          target: String(t.id),
+          label: col.name,
+          labelStyle: {
+            fill: "#7c6af7",
+            fontSize: 10,
+            fontFamily: "monospace",
+          },
+          labelBgStyle: { fill: "#0d0d14", fillOpacity: 0.9 },
+          type: "smoothstep",
+          style: { stroke: "#4a3a8a", strokeWidth: 1.5 },
+          markerEnd: { type: MarkerType.ArrowClosed, color: "#4a3a8a" },
+        })
       })
-    })
+    }
   })
+
   return { nodes, edges }
 }
 
