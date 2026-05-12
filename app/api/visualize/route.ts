@@ -14,7 +14,7 @@ const redis = new Redis({
 
 const ratelimit = new Ratelimit({
   redis,
-  limiter: Ratelimit.fixedWindow(100, "1 h"),
+  limiter: Ratelimit.fixedWindow(5, "1 h"),
 })
 
 export async function POST(req: NextRequest) {
