@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react"
 import PromptInput from "./components/promptinput"
+import AnswerView from "./components/answer"
 import NodeDetails from "./components/nodedetails"
 import Graph from "./components/graph"
 import { toFlow, AnyNodeData } from "@/lib/parse"
@@ -12,10 +13,15 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
-import { ArrowLeft, TriangleAlert, GitBranch } from "lucide-react"
+import {
+  ArrowLeft,
+  TriangleAlert,
+  GitBranch,
+  MessageSquare,
+} from "lucide-react"
 import { useUser, SignInButton, UserButton } from "@clerk/nextjs"
 
-type View = "home" | "graph"
+type View = "home" | "graph" | "chat"
 const TOPBAR_H = 52
 
 const TYPE_LABELS: Record<
@@ -35,6 +41,8 @@ const EXAMPLES = [
   { q: "React vs Vue vs Angular", hint: "comparison" },
   { q: "History of the internet", hint: "timeline" },
   { q: "Machine learning concepts", hint: "mindmap" },
+  { q: "What is quantum computing?", hint: "general" },
+  { q: "Explain REST APIs", hint: "general" },
 ]
 
 export default function Home() {
@@ -47,10 +55,34 @@ export default function Home() {
   const [warning, setWarning] = useState<string | null>(null)
   const [question, setQuestion] = useState("")
   const [vizType, setVizType] = useState<string>("flow")
+  const [response, setResponse] = useState<string | null>(null)
+  const [visualizationReady, setVisualizationReady] = useState(false)
 
   const { isSignedIn } = useUser()
 
-  const handleSubmit = useCallback(async (q: string) => {
+  const handleGeneralQuery = useCallback(async (q: string) => {
+    setLoading(true)
+    setWarning(null)
+    setQuestion(q)
+    setVisualizationReady(false)
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? "Unknown error")
+      setResponse(json.answer)
+      setView("chat")
+    } catch (err) {
+      setWarning(err instanceof Error ? err.message : "Something went wrong.")
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const handleVisualize = useCallback(async (q: string) => {
     setLoading(true)
     setWarning(null)
     setQuestion(q)
@@ -70,7 +102,15 @@ export default function Home() {
       setIsMock(json.mock ?? false)
       setWarning(json.warning ?? null)
       setSelected(null)
-      setView("graph")
+      setVisualizationReady(true)
+
+      if (response.type === "general") {
+        setResponse((response as any).answer || "Here's what I found...")
+        setView("chat")
+      } else {
+        setResponse(`Here's the ${response.type} visualization for: "${q}"`)
+        setView("graph")
+      }
     } catch (err) {
       setWarning(err instanceof Error ? err.message : "Something went wrong.")
     } finally {
@@ -78,8 +118,20 @@ export default function Home() {
     }
   }, [])
 
+  const handleSubmit = useCallback(
+    async (q: string) => {
+      await handleVisualize(q)
+    },
+    [handleVisualize]
+  )
+
   const handleMockExample = useCallback(
     (q: string, hint: string) => {
+      if (hint === "general") {
+        handleGeneralQuery(q)
+        return
+      }
+
       const mockResponse = MOCK_EXAMPLES[hint]
       if (!mockResponse) {
         handleSubmit(q)
@@ -93,10 +145,33 @@ export default function Home() {
       setIsMock(true)
       setWarning(null)
       setSelected(null)
+      setVisualizationReady(true)
+      setResponse(
+        `Here's a demo ${mockResponse.type} visualization for: "${q}"`
+      )
       setView("graph")
     },
-    [handleSubmit]
+    [handleSubmit, handleGeneralQuery]
   )
+
+  /* ── Chat view ─────────────────────────────────── */
+  if (view === "chat") {
+    return (
+      <AnswerView
+        question={question}
+        response={response}
+        visualizationReady={visualizationReady}
+        warning={warning}
+        onBack={() => {
+          setView("home")
+          setResponse(null)
+        }}
+        onViewVisualization={
+          nodes.length > 0 ? () => setView("graph") : undefined
+        }
+      />
+    )
+  }
 
   /* ── Graph view ─────────────────────────────────── */
   if (view === "graph") {
@@ -139,6 +214,17 @@ export default function Home() {
                 Demo
               </Badge>
             )}
+            {response && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setView("chat")}
+                className="h-7 text-xs"
+              >
+                <MessageSquare className="mr-1 h-3 w-3" />
+                View Answer
+              </Button>
+            )}
             <Separator orientation="vertical" className="h-4" />
           </div>
         </header>
@@ -176,7 +262,7 @@ export default function Home() {
       <header className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur-sm">
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-6">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-md border bg-foreground">
+            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-foreground">
               <GitBranch className="h-3.5 w-3.5 text-background" />
             </div>
             <span className="text-sm font-semibold tracking-tight">
@@ -206,7 +292,8 @@ export default function Home() {
           </h1>
           <p className="text-base leading-relaxed text-muted-foreground">
             Ask anything and get an interactive visual — schemas, flows,
-            timelines, mind maps, and comparisons.
+            timelines, mind maps, and comparisons. General questions get text
+            answers.
           </p>
 
           {/* Type pills */}
@@ -220,6 +307,10 @@ export default function Home() {
                 {v.label}
               </Badge>
             ))}
+            <Badge variant="secondary" className="text-xs font-normal">
+              <MessageSquare className="mr-1 h-3 w-3" />
+              Q&A
+            </Badge>
           </div>
         </div>
 
@@ -227,8 +318,9 @@ export default function Home() {
         <div className="w-full max-w-2xl">
           <PromptInput
             onSubmit={handleSubmit}
+            onVisualize={handleVisualize}
             loading={loading}
-            disabled={!isSignedIn}
+            disabled={!isSignedIn || loading}
           />
         </div>
 
@@ -259,6 +351,9 @@ export default function Home() {
                   "disabled:opacity-40"
                 )}
               >
+                {hint === "general" && (
+                  <MessageSquare className="mr-1 h-3 w-3" />
+                )}
                 {q}
               </Button>
             ))}

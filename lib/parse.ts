@@ -6,6 +6,7 @@ import {
   MindmapResponse,
   TimelineResponse,
   ComparisonResponse,
+  GeneralResponse,
   Table,
   FlowNode,
   MindmapNode,
@@ -24,12 +25,17 @@ export type ComparisonNodeData = {
   winner: string | null
   id: number
 }
+export type GeneralNodeData = {
+  kind: "general"
+  answer: string
+}
 export type AnyNodeData =
   | TableNodeData
   | FlowNodeData
   | MindmapNodeData
   | TimelineNodeData
   | ComparisonNodeData
+  | GeneralNodeData
 
 const GAP_X = 340
 const GAP_Y = 300
@@ -453,6 +459,25 @@ function comparisonToFlow(r: ComparisonResponse) {
   return { nodes, edges: [] as Edge[] }
 }
 
+// ─── General ───────────────────────────────────────────────────────────────
+
+function generalToFlow(r: GeneralResponse) {
+  const nodes: Node<AnyNodeData>[] = [
+    {
+      id: "general-response",
+      type: "default",
+      draggable: true,
+      position: { x: 0, y: 0 },
+      data: {
+        kind: "general",
+        answer: safeString(r.answer),
+      } satisfies GeneralNodeData,
+    },
+  ]
+
+  return { nodes, edges: [] as Edge[] }
+}
+
 // ─── Entry point ───────────────────────────────────────────────────────────
 
 export function toFlow(response: unknown): {
@@ -505,6 +530,8 @@ export function toFlow(response: unknown): {
         return timelineToFlow(parsed as TimelineResponse)
       case "comparison":
         return comparisonToFlow(parsed as ComparisonResponse)
+      case "general":
+        return generalToFlow(parsed as GeneralResponse)
       default:
         console.warn(
           "[toFlow] Unknown response type:",

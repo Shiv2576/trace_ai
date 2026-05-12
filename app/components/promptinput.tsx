@@ -5,42 +5,70 @@ import { Loader2, ArrowUp, CornerDownLeft } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
-
 import { useUser } from "@clerk/nextjs"
 
 interface Props {
   onSubmit: (question: string) => void
+  onVisualize: (question: string) => void
   loading: boolean
   disabled: boolean
+  response?: string | null
+  visualizationReady?: boolean
 }
 
-export default function PromptInput({ onSubmit, loading, disabled }: Props) {
+export default function PromptInput({
+  onSubmit,
+  onVisualize,
+  loading,
+  disabled,
+}: Props) {
   const [question, setQuestion] = useState("")
   const [focused, setFocused] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { isSignedIn, isLoaded } = useUser()
-  const isDisabled = !isLoaded || !isSignedIn || loading
 
+  const isDisabled = !isLoaded || !isSignedIn || loading || disabled
   const isReady = (question?.trim().length ?? 0) >= 3
-
-  const handleSubmit = () => {
-    const trimmed = question?.trim() ?? ""
-
-    if (loading || trimmed.length < 3) return
-
-    onSubmit(trimmed)
-    setQuestion("")
-  }
 
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
     el.style.height = "auto"
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
+    el.style.height = `${Math.min(el.scrollHeight, 150)}px`
   }, [question])
 
+  const detectQueryType = (q: string): "general" | "visualization" => {
+    const query = q.toLowerCase()
+    if (
+      /\bvs\.?\b|versus|\bcompare\b|\bdifference between\b/.test(query) ||
+      /\bdatabase\b|\bschema\b|\btable\b|\bsql\b|\berd\b/.test(query) ||
+      /\bhistory\b|\btimeline\b|\bevolution\b|\bchronolog\b/.test(query) ||
+      /\bhow does\b|\bprocess\b|\bsteps?\b|\bworkflow\b|\bpipeline\b/.test(
+        query
+      ) ||
+      /\boverview\b|\btypes?\b|\bcategories?\b|\bconcepts?\b/.test(query)
+    ) {
+      return "visualization"
+    }
+    return "general"
+  }
+
+  const handleSubmit = () => {
+    const trimmed = question?.trim() ?? ""
+    if (isDisabled || trimmed.length < 3) return
+
+    const queryType = detectQueryType(trimmed)
+    setQuestion("")
+
+    if (queryType === "visualization") {
+      onVisualize(trimmed)
+    } else {
+      onSubmit(trimmed)
+    }
+  }
+
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-3">
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
       <div
         className={cn(
           "relative overflow-hidden rounded-2xl border transition-all duration-300",
@@ -79,14 +107,16 @@ export default function PromptInput({ onSubmit, loading, disabled }: Props) {
           placeholder={
             !isSignedIn
               ? "Sign in to start asking..."
-              : "What question should I reason through?\ne.g. Should I move my startup to San Francisco?"
+              : disabled
+                ? "Please wait..."
+                : "Ask anything — questions, comparisons, processes, databases..."
           }
-          rows={3}
+          rows={2}
           className={cn(
             "w-full resize-none border-0 bg-transparent px-5 pt-4 pb-2",
             "font-sans text-[14px] leading-relaxed text-white/85 placeholder:text-white/20",
             "focus-visible:ring-0 focus-visible:ring-offset-0",
-            "max-h-[200px] min-h-[90px] overflow-y-auto",
+            "max-h-[150px] min-h-[72px] overflow-y-auto",
             "scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
           )}
         />
@@ -96,7 +126,7 @@ export default function PromptInput({ onSubmit, loading, disabled }: Props) {
           <div className="flex items-center gap-1.5 text-white/20">
             <CornerDownLeft className="h-3 w-3" />
             <span className="font-mono text-[11px]">
-              Enter for new line · ⌘↵ to run
+              Enter for new line · ⌘↵ to send
             </span>
           </div>
 
@@ -108,7 +138,7 @@ export default function PromptInput({ onSubmit, loading, disabled }: Props) {
               size="icon"
               className={cn(
                 "h-8 w-8 rounded-full border transition-all duration-200",
-                isReady && !loading
+                isReady && !isDisabled
                   ? "border-white/20 bg-white/10 text-white/60 hover:border-white/30 hover:bg-white/15 hover:text-white/80"
                   : "cursor-not-allowed border-white/[0.06] bg-white/[0.03] text-white/20"
               )}

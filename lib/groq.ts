@@ -8,11 +8,9 @@ export type QueryType =
   | "mindmap"
   | "timeline"
   | "comparison"
+  | "general"
 
 // ─── Zod Schemas ───────────────────────────────────────────────────────────
-// Each schema uses .transform() so the OUTPUT type (what z.infer gives you)
-// is fully concrete — no undefined leaking, no optional fields.
-// This is what makes the switch() return type satisfy AnyResponse.
 
 export const ColumnSchema = z
   .object({
@@ -136,8 +134,13 @@ export const ComparisonResponseSchema = z.object({
   verdict: z.string(),
 })
 
+// General response for non-visualization queries
+export const GeneralResponseSchema = z.object({
+  type: z.literal("general"),
+  answer: z.string(),
+})
+
 // ─── Types ─────────────────────────────────────────────────────────────────
-// z.infer gives the TRANSFORMED output type — fully concrete, no undefined.
 
 export type Column = z.infer<typeof ColumnSchema>
 export type Table = z.infer<typeof TableSchema>
@@ -149,6 +152,7 @@ export type MindmapResponse = z.infer<typeof MindmapResponseSchema>
 export type TimelineNode = z.infer<typeof TimelineNodeSchema>
 export type TimelineResponse = z.infer<typeof TimelineResponseSchema>
 export type ComparisonResponse = z.infer<typeof ComparisonResponseSchema>
+export type GeneralResponse = z.infer<typeof GeneralResponseSchema>
 
 export type AnyResponse =
   | SchemaResponse
@@ -156,6 +160,7 @@ export type AnyResponse =
   | MindmapResponse
   | TimelineResponse
   | ComparisonResponse
+  | GeneralResponse
 
 // ─── Sanitizer ─────────────────────────────────────────────────────────────
 
@@ -283,7 +288,13 @@ function detectType(question: string): QueryType {
     )
   )
     return "flow"
-  return "mindmap"
+  if (
+    /\boverview\b|\btypes?\b|\bcategories?\b|\bconcepts?\b|\bexplain\b|\bwhat (is|are)\b|\btell me about\b|\bdefinition\b/.test(
+      q
+    )
+  )
+    return "mindmap"
+  return "general"
 }
 
 // ─── Prompts ───────────────────────────────────────────────────────────────
@@ -347,6 +358,8 @@ RULES: id and depends_upon values MUST be plain integers. Nodes in strict chrono
   "verdict": "Overall recommendation in 2 sentences."
 }
 RULES: id MUST be a plain integer. winner is exactly "a", "b", or null for a tie. 6-8 categories.`,
+
+  general: `You are a helpful, knowledgeable assistant. Provide clear, concise, and accurate answers. Format your response with proper paragraphs. Use bullet points and sections where appropriate. Be thorough but avoid unnecessary fluff.`,
 }
 
 // ─── Main fetch ────────────────────────────────────────────────────────────
@@ -360,6 +373,46 @@ export async function fetchVisualization(
   const queryType = detectType(question)
   console.log(`[groq] type="${queryType}" question="${question}"`)
 
+  // For general queries, use a different approach (no JSON format required)
+  if (queryType === "general") {
+    const res = await fetch(GROQ_API, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.3,
+        max_tokens: 2000,
+        messages: [
+          { role: "system", content: PROMPTS.general },
+          { role: "user", content: question },
+        ],
+      }),
+    })
+
+    if (!res.ok) {
+      const err = await res.text()
+      console.error(`[groq] API error ${res.status}:`, err)
+      throw new Error(`Groq API error ${res.status}: ${err.slice(0, 300)}`)
+    }
+
+    const data = await res.json()
+    const choices = (data as Record<string, unknown>)?.choices
+    const content = (
+      (Array.isArray(choices) ? choices[0] : null) as Record<string, unknown>
+    )?.message as Record<string, unknown>
+
+    const answer = content?.content
+    if (typeof answer !== "string" || answer.trim() === "") {
+      throw new Error("Groq returned empty content")
+    }
+
+    return { type: "general", answer: answer.trim() }
+  }
+
+  // Visualization queries (existing logic)
   const res = await fetch(GROQ_API, {
     method: "POST",
     headers: {
@@ -370,7 +423,6 @@ export async function fetchVisualization(
       model: "llama-3.3-70b-versatile",
       temperature: 0.1,
       max_tokens: 6000,
-      // No response_format — not reliably supported on Groq's edge runtime
       messages: [
         { role: "system", content: PROMPTS[queryType] },
         {
@@ -407,7 +459,7 @@ export async function fetchVisualization(
 
   const parsed = extractJson(rawText)
   const safe = sanitize(parsed) as Record<string, unknown>
-  safe.type = queryType // force — never trust the LLM's own type field
+  safe.type = queryType
 
   switch (queryType) {
     case "schema":
