@@ -521,7 +521,7 @@ function GlassControls() {
           },
         ].map(({ icon, label, className: cls }) => (
           <Tooltip key={label}>
-            <TooltipTrigger asChild>
+            <TooltipTrigger>
               <Button
                 size="icon"
                 variant="ghost"
@@ -539,7 +539,7 @@ function GlassControls() {
         <Separator />
 
         <Tooltip>
-          <TooltipTrigger asChild>
+          <TooltipTrigger>
             <Button
               size="icon"
               variant="ghost"

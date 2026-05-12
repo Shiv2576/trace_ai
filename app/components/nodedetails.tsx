@@ -71,7 +71,7 @@ export default function NodeDetails({ node, onClose }: Props) {
     },
   } as const
 
-  const config = kindConfig[node.kind] || kindConfig.flow
+  const config = kindConfig.flow
   const Icon = config.icon
 
   const content = (() => {
